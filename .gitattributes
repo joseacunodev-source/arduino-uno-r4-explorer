@@ -1,0 +1,6 @@
+* text=auto
+*.png binary
+*.glb binary
+*.step binary
+*.stp binary
+*.zip binary
