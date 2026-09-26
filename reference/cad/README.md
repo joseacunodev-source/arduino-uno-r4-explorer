@@ -12,7 +12,7 @@ Retrieved 2026-09-25 from Arduino's [UNO R4 WiFi resource page](https://docs.ard
 
 No Blender, FreeCADCmd or Assimp executable was present on PATH when checked. Node.js is available. [occt-import-js](https://github.com/kovacsv/occt-import-js) supports reading STEP in Node through WebAssembly and returns the assembly tree plus indexed geometry and colors. It can be used as an offline development tool, followed by GLB export, without shipping the CAD parser in the website runtime. Preserve component hierarchy and assembled positions during conversion; simplify and regroup only after reviewing the model visually.
 
-Converted successfully with `scripts/convert-cad.mjs`: `public/models/arduino-uno-r4-wifi.glb` is 8,524,440 bytes, contains 274,924 triangles, and uses 43 merged material meshes in 25 named interaction groups. `public/models/arduino-uno-r4-wifi.parts.json` records the source designators and measured bounds for each group. `src/data/cadParts.ts` provides the actual assembled pivot positions. The original STEP remains available for later refinement.
+Converted successfully with `scripts/convert-cad.mjs`: `public/models/arduino-uno-r4-wifi.glb` is 18,723,128 bytes, contains 671,086 triangles, and uses 43 merged material meshes in 25 named interaction groups. `public/models/arduino-uno-r4-wifi.parts.json` records the source designators and measured bounds for each group. `src/data/cadParts.ts` provides the actual assembled pivot positions. The original STEP remains available for later refinement.
 
 Source coordinate system: X/Y are the board plane in millimeters, +Z points above the PCB, and the PCB surface is Z=0. Source assembly bounds are approximately `[-1.960, 0, -3.406]` to `[68.580, 53.340, 11.094]` mm including projecting ports and pins. Conversion maps each vertex to `[(X-34.29)/10, Z/10, (26.67-Y)/10]`; world Y is up and one world unit is 10 mm. The PCB footprint in this CAD is 68.58 × 53.34 mm. The Arduino store's 68.85 mm listing differs from this measured source geometry.
 
@@ -25,7 +25,7 @@ npm install --prefix .tools/cad occt-import-js three
 node scripts/convert-cad.mjs
 ```
 
-The optional `triangulated.json` inspection cache is ignored by Git. The converter works directly from STEP when it is absent. CAD tessellation uses 0.08 mm linear deflection and 0.35 rad angular deflection. Source per-face colors are retained and geometry is merged only within each logical group/material. The Node converter's dependencies stay in `.tools/cad` and are not website runtime dependencies.
+The optional `triangulated.json` inspection cache is ignored by Git. The converter works directly from STEP when it is absent. CAD tessellation uses 0.035 mm linear deflection and 0.22 rad angular deflection. Source per-face colors are retained and geometry is merged only within each logical group/material. The Node converter's dependencies stay in `.tools/cad` and are not website runtime dependencies.
 
 ## Source and license notes
 
@@ -42,3 +42,9 @@ The separate [electrical CAD archive](https://docs.arduino.cc/static/41d76ccb600
 - [Schematics](https://docs.arduino.cc/resources/schematics/ABX00087-schematics.pdf)
 
 Verified specifications: Renesas RA4M1, 32-bit Arm Cortex-M4 at 48 MHz, 256 kB flash, 32 kB SRAM, ESP32-S3 for Wi-Fi and Bluetooth LE, 12 x 8 red LED matrix, USB-C, 14 digital I/O and 6 analog inputs. RA4M1/GPIO operates at 5 V; the ESP32-S3 module is 3.3 V. VIN/barrel input is 6–24 V. Avoid presenting 24 V as a GPIO or USB rating.
+
+Presentation update: the runtime applies physical metal, textured polymer, and clear-coated solder-mask materials, with procedural micrograin and studio area reflections. These finishes and the simplified markings are authored visualization details, not photographic scans. Conversion reads the STEP file by default; set CAD_USE_CACHE=1 only when intentionally reusing a triangulation cache.
+
+## Photo surface revision
+
+The original simplified presentation labels have been replaced by registered photographic component surfaces and the supplied underside photo. A generated bare-board top texture removes photographed raised components for exploded viewing. The runtime also adds true plated mounting holes, laminate edges and a hollow DC jack while retaining the CAD component pivots. See [texture sources and exact generation prompt](../textures/README.md). The reconstructed bare-board traces serve visualization and are not fabrication artwork.

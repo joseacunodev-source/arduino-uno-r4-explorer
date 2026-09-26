@@ -1,7 +1,9 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CAD_PARTS } from '../data/cadParts'
-import { detailCad } from './detailCad'
+import { photoDetails } from './photoDetails'
+import { finishMaterials } from './materials'
+import { refineComponents } from './refineComponents'
 
 /** Real Arduino STEP geometry, converted offline; no CAD parser ships to browsers. */
 export async function loadArduino() {
@@ -34,9 +36,12 @@ export async function loadArduino() {
     })
     return { id: config.id, object }
   })
-  const disposeDetails = detailCad(root)
+  const disposeFinish = finishMaterials(root)
+  refineComponents(root)
+  const disposeDetails = await photoDetails(root)
   function dispose() {
     disposeDetails()
+    disposeFinish()
     const geometries = new Set<THREE.BufferGeometry>()
     const materials = new Set<THREE.Material>()
     root.traverse(child => {

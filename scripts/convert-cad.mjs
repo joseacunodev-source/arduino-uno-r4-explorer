@@ -8,8 +8,8 @@ const require = createRequire(import.meta.url);
 const source = 'reference/cad/official-step/UNO_R4_WIFI.step';
 const cache = 'reference/cad/triangulated.json';
 const occt = await require('../.tools/cad/node_modules/occt-import-js')();
-const result = fs.existsSync(cache) ? JSON.parse(fs.readFileSync(cache)) : occt.ReadStepFile(fs.readFileSync(source), {
-  linearUnit: 'millimeter', linearDeflectionType: 'absolute_value', linearDeflection: 0.08, angularDeflection: 0.35,
+const result = process.env.CAD_USE_CACHE === '1' && fs.existsSync(cache) ? JSON.parse(fs.readFileSync(cache)) : occt.ReadStepFile(fs.readFileSync(source), {
+  linearUnit: 'millimeter', linearDeflectionType: 'absolute_value', linearDeflection: 0.035, angularDeflection: 0.22,
 });
 if (!result.success) throw new Error('STEP triangulation failed');
 // Original CAD has XY board plane, +Z top, origin at PCB bottom left.

@@ -2,7 +2,7 @@
   "source": "reference/cad/official-step/UNO_R4_WIFI.step",
   "sourceURL": "https://docs.arduino.cc/resources/models/ABX00087-step.zip",
   "transform": "[(CAD_X-34.29)/10, CAD_Z/10, (26.67-CAD_Y)/10]",
-  "triangles": 274924,
+  "triangles": 671086,
   "drawMeshes": 43,
   "parts": [
     {
