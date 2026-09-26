@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { CAD_PARTS } from '../data/cadParts'
 import { photoDetails } from './photoDetails'
 import { finishMaterials } from './materials'
@@ -8,7 +9,7 @@ import { refineComponents } from './refineComponents'
 /** Real Arduino STEP geometry, converted offline; no CAD parser ships to browsers. */
 export async function loadArduino() {
   const url = `${import.meta.env.BASE_URL}models/arduino-uno-r4-wifi.glb`
-  const gltf = await new GLTFLoader().loadAsync(url)
+  const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url)
   const root = gltf.scene
   root.name = 'Arduino UNO R4 WiFi — official CAD'
   const parts = CAD_PARTS.map(config => {

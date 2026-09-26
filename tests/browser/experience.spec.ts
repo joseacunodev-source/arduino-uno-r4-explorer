@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 async function enter(page: Page) {
   await page.goto('/')
@@ -107,6 +108,14 @@ test('model failure reveals readable component details',async ({page})=>{
   await expect(page.locator('.loading-screen')).toHaveCount(0)
 })
 
+test('a failed 3D script download keeps details and retry available', async ({page}) => {
+  await page.route('**/assets/ArduinoScene-*.js', route => route.abort())
+  await page.goto('/')
+  await expect(page.getByRole('complementary',{name:'Board details'})).toBeVisible()
+  await expect(page.getByRole('button',{name:'Try again'})).toBeVisible()
+  await expect(page.locator('.loading-screen')).toHaveCount(0)
+})
+
 test('dragging a component preserves exact CAD assembly coordinates',async ({page})=>{
   await enter(page)
   const canvas=page.locator('canvas')
@@ -123,4 +132,61 @@ test('dragging a component preserves exact CAD assembly coordinates',async ({pag
   await expect(canvas).toHaveAttribute('data-progress','1.0000')
   const {CAD_PARTS}=await import('../../src/data/cadParts')
   await expect(canvas).toHaveAttribute('data-selected-position',CAD_PARTS.find(p=>p.id==='ra4m1')!.assembled.map(v=>v.toFixed(3)).join(','))
+})
+
+test('production security policy, local fonts, idle rendering and accessible credits', async ({page}) => {
+  const external: string[] = []
+  const errors: string[] = []
+  page.on('request', request => { if (/^https?:/.test(request.url()) && !request.url().startsWith('http://127.0.0.1:5174')) external.push(request.url()) })
+  page.on('pageerror', error => errors.push(error.message))
+  const response = await page.request.get('/')
+  expect(response.headers()['content-security-policy']).toContain("script-src 'self' 'wasm-unsafe-eval'")
+  expect(response.headers()['x-content-type-options']).toBe('nosniff')
+  await enter(page)
+  const canvas = page.locator('canvas')
+  await expect.poll(async () => {
+    const first = await canvas.getAttribute('data-render-frame')
+    await page.waitForTimeout(400)
+    return first === await canvas.getAttribute('data-render-frame')
+  }).toBe(true)
+  await page.getByRole('button', {name:'Details', exact:true}).click()
+  await expect(page.getByRole('link', {name:'jose acuno dev'})).toBeVisible()
+  await page.getByRole('link', {name:'jose acuno dev'}).scrollIntoViewIfNeeded()
+  expect((await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze()).violations).toEqual([])
+  await page.screenshot({path:'artifacts/release-credits.png'})
+  await page.getByRole('searchbox',{name:'Search components'}).fill('Renesas')
+  await page.locator('.component-trigger').click()
+  await page.getByRole('button',{name:'Find on board',exact:true}).click()
+  await expect(canvas).toHaveAttribute('data-focused-part','ra4m1')
+  expect((await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze()).violations).toEqual([])
+  expect(external).toEqual([])
+  expect(errors).toEqual([])
+})
+
+test('real touch pinch, mobile assembly and landscape layout', async ({browser}) => {
+  const context = await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:2})
+  const page = await context.newPage()
+  try {
+    await page.goto('http://127.0.0.1:5174/')
+    await expect(page.locator('canvas')).toHaveAttribute('data-texture-ready','true',{timeout:60000})
+    await expect(page.locator('.loading-screen')).toHaveCount(0)
+    const session = await page.context().newCDPSession(page)
+    const touch = (id: number, x: number, y: number) => ({id,x,y,radiusX:3,radiusY:3,force:1})
+    await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch(1,130,350)]})
+    await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch(1,130,350),touch(2,240,350)]})
+    await session.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[touch(1,80,350),touch(2,290,350)]})
+    await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]})
+    await expect.poll(async()=>Number(await page.locator('canvas').getAttribute('data-zoom'))).toBeGreaterThan(1.6)
+    await page.getByRole('group',{name:'Touch controls'}).getByRole('button',{name:'Assemble',exact:true}).tap()
+    await expect(page.locator('canvas')).toHaveAttribute('data-progress','1.0000')
+    await page.getByRole('group',{name:'Touch controls'}).getByRole('button',{name:'Explode',exact:true}).tap()
+    await expect(page.locator('canvas')).toHaveAttribute('data-progress','0.0000')
+    await page.getByRole('button',{name:'Details',exact:true}).tap()
+    expect((await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze()).violations).toEqual([])
+    await page.screenshot({path:'artifacts/release-mobile.png'})
+    await page.setViewportSize({width:844,height:390})
+    await expect.poll(async()=>{const a=(await page.locator('canvas').boundingBox())!,b=(await page.locator('.inspector').boundingBox())!;return a.x+a.width<=b.x+1}).toBe(true)
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+    await page.screenshot({path:'artifacts/release-landscape.png'})
+  } finally { await context.close() }
 })

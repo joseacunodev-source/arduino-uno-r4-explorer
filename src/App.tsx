@@ -3,6 +3,7 @@ import { PARTS, type PartConfig } from './data/parts'
 import { useReducedMotion } from './hooks/useReducedMotion'
 import { useAssembly } from './hooks/useAssembly'
 import { Icon } from './components/Icon'
+import { SceneBoundary } from './components/SceneBoundary'
 const ArduinoScene = lazy(() => import('./three/ArduinoScene'))
 
 const specs = [
@@ -31,6 +32,7 @@ export default function App() {
   const detailsButton = useRef<HTMLButtonElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const helpClose = useRef<HTMLButtonElement>(null)
+  const helpButton = useRef<HTMLButtonElement>(null)
   const activePart = configs.find(part => part.id === focused)
   const onReady = useCallback((parts: readonly PartConfig[]) => { setConfigs(parts); setReady(true) }, [])
   const onError = useCallback(() => { setFailed(true); setReady(true) }, [])
@@ -41,6 +43,7 @@ export default function App() {
     setSelected(id); setFocused(id); setFocusToken(v => v + 1); goTo(0, true)
   }
   const closeDetails = () => { setDetailsOpen(false); detailsButton.current?.focus() }
+  const closeHelp = () => { setHelp(false); helpButton.current?.focus() }
   useEffect(() => {
     if (!ready) return
     const timer = window.setTimeout(() => { setEntered(true); if (failed) setDetailsOpen(true) }, reducedMotion ? 0 : 600)
@@ -66,16 +69,16 @@ export default function App() {
       <section ref={section} className="assembly-scroll" id="experience" aria-label="Interactive board assembly">
         <div className="experience-sticky">
           <div className="scene-area" data-testid="scene-area">
-            <Suspense fallback={null}><ArduinoScene progress={progress} selected={selected} focused={focused} focusToken={focusToken} onSelect={setSelected} onHover={onHover} onReady={onReady} onError={onError} mode="move" resetToken={resetToken} reducedMotion={reducedMotion} /></Suspense>
+            <SceneBoundary onError={onError}><Suspense fallback={null}><ArduinoScene progress={progress} selected={selected} focused={focused} focusToken={focusToken} onSelect={setSelected} onHover={onHover} onReady={onReady} onError={onError} mode="move" resetToken={resetToken} reducedMotion={reducedMotion} /></Suspense></SceneBoundary>
             {activePart && <div className="focus-caption" role="status"><div><span className="focus-dot" /><strong>{activePart.name}</strong><p>{activePart.spec}</p></div><button onClick={() => setFocused(null)}>Show all <Icon name="close" size={14} /></button></div>}
           </div>
           <div className="corner-tools" role="group" aria-label="Experience controls">
             <button onClick={reset} aria-label="Reset parts and view" title="Reset"><Icon name="reset" /></button>
-            <button onClick={() => setHelp(v => !v)} aria-label="Show controls" aria-expanded={help} title="Controls">?</button>
+            <button ref={helpButton} onClick={() => setHelp(v => !v)} aria-label="Show controls" aria-expanded={help} title="Controls">?</button>
             <button ref={detailsButton} className="details-toggle" onClick={() => setDetailsOpen(v => !v)} aria-expanded={detailsOpen} aria-controls="inspector"><span className="accent-square" /> Details</button>
           </div>
-          {help && <section className="help-popover" role="dialog" aria-label="Controls"><header><h2>Controls</h2><button ref={helpClose} onClick={() => setHelp(false)} aria-label="Close controls"><Icon name="close" /></button></header><dl><div><dt>Move a part</dt><dd>Left-drag a component</dd></div><div><dt>Orbit</dt><dd>Left-drag empty space</dd></div><div><dt>Zoom</dt><dd>Right-drag up / down</dd></div><div><dt>Pan</dt><dd>Middle-drag</dd></div><div><dt>Assemble</dt><dd>Scroll down</dd></div><div><dt>Disassemble</dt><dd>Scroll up</dd></div></dl><p>Touch: drag to move or orbit. Use Details for assembly and camera controls.</p></section>}
-          <span className="sr-only" aria-live="polite">{percent}% assembled.</span>
+          {help && <section className="help-popover" role="dialog" aria-label="Controls"><header><h2>Controls</h2><button ref={helpClose} onClick={closeHelp} aria-label="Close controls"><Icon name="close" /></button></header><dl><div><dt>Move a part</dt><dd>Left-drag a component</dd></div><div><dt>Orbit</dt><dd>Left-drag empty space</dd></div><div><dt>Zoom</dt><dd>Right-drag up / down</dd></div><div><dt>Pan</dt><dd>Middle-drag</dd></div><div><dt>Assemble</dt><dd>Scroll down</dd></div><div><dt>Disassemble</dt><dd>Scroll up</dd></div></dl><p>Touch: drag to move or orbit. Pinch with two fingers to zoom. Tap Assemble below the board.</p></section>}
+          {!detailsOpen && !focused && <div className="touch-tools" role="group" aria-label="Touch controls"><button aria-label="Zoom out" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'out' }))}>−</button><button onClick={() => goTo(percent > 50 ? 0 : 1)}>{percent > 50 ? 'Explode' : 'Assemble'}</button><button aria-label="Zoom in" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'in' }))}>+</button></div>}
         </div>
       </section>
     </main>
@@ -94,7 +97,7 @@ export default function App() {
           {visibleParts.length === 0 && <p className="empty-results">No matching components.</p>}
         </> : <><dl className="spec-table">{specs.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><a className="documentation-link" href="https://docs.arduino.cc/hardware/uno-r4-wifi/" target="_blank" rel="noreferrer">Arduino documentation ↗</a></>}
         <details className="camera-controls"><summary>Camera controls</summary><div>{[['Orbit left','left'],['Orbit right','right'],['Tilt up','up'],['Tilt down','down'],['View underside','bottom'],['Zoom in','in'],['Zoom out','out']].map(([label, action]) => <button key={action} onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: action }))}>{label}</button>)}<button onClick={reset}>Reset view</button></div></details>
-        <footer className="details-credit">Original hardware design: Arduino.<br />Independent interactive visualization.</footer>
+        <footer className="details-credit"><span>Design & development</span><a href="https://github.com/joseacunodev-source" target="_blank" rel="noopener noreferrer" className="creator-credit">jose acuno dev ↗</a><a href="https://github.com/joseacunodev-source/arduino-uno-r4-explorer" target="_blank" rel="noopener noreferrer">View source ↗</a><p>Original hardware design: Arduino.<br />Independent visualization. Not affiliated with Arduino.</p></footer>
       </div>
     </aside>}
   </>

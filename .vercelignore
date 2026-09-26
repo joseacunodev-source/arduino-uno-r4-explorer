@@ -1,0 +1,12 @@
+.tools
+.cache
+artifacts
+test-results
+playwright-report
+reference
+tests
+node_modules
+dist
+.git
+*.tsbuildinfo
+.env*

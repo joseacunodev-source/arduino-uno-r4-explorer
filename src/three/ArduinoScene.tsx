@@ -1,18 +1,20 @@
-import { Component, Suspense, useEffect, useRef, useState } from 'react'
-import type { ErrorInfo, ReactNode, RefObject } from 'react'
+import { memo, Suspense, useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
+import { SceneBoundary, SceneFallback } from '../components/SceneBoundary'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Environment, Lightformer } from '@react-three/drei'
 import * as THREE from 'three'
 import { loadArduino } from './loadArduino'
 import { PARTS } from '../data/parts'
 import type { PartConfig } from '../data/parts'
-import { idleIntensity, partProgress, positionAt } from '../lib/assembly'
+import { partProgress, positionAt } from '../lib/assembly'
 import type { Vec3 } from '../lib/assembly'
 
 export type InteractionMode = 'move' | 'rotate'
 export type ArduinoModel = Awaited<ReturnType<typeof loadArduino>>
 
-const fitZoom = (width: number, height: number) => width < 640
+const portraitView = (width: number, height: number) => width < 640 && height > width * 1.15
+const fitZoom = (width: number, height: number) => portraitView(width, height)
   ? Math.min(width / 9.5, height / 14)
   : Math.min(width / 13.8, height / 11.4)
 
@@ -41,6 +43,8 @@ function World(props: SceneProps) {
   const desiredPan = useRef(new THREE.Vector3())
   const latest = useRef(props)
   latest.current = props
+  // Render on input and while transitions settle, then let the GPU rest.
+  useEffect(() => { invalidate() })
   const offsets = useRef(new Map<string, Vec3>())
   const velocities = useRef(new Map<string, THREE.Vector3>())
   const zoomFactor = useRef(1)
@@ -68,7 +72,7 @@ function World(props: SceneProps) {
     if (!(camera instanceof THREE.OrthographicCamera)) return
     camera.position.set(7.5, 11.8, 14)
     camera.lookAt(0, 1.0, 0)
-    if (size.width < 640) camera.rotateZ(Math.PI / 2)
+    if (portraitView(size.width, size.height)) camera.rotateZ(Math.PI / 2)
     camera.zoom = fitZoom(size.width, size.height)
     camera.updateProjectionMatrix()
     invalidate()
@@ -112,6 +116,12 @@ function World(props: SceneProps) {
     const plane = new THREE.Plane()
     const normal = new THREE.Vector3()
     const hit = new THREE.Vector3()
+    const touches = new Map<number, { x: number; y: number }>()
+    let pinch: { distance: number; zoom: number } | null = null
+    const touchDistance = () => {
+      const [a, b] = [...touches.values()]
+      return Math.hypot(a.x - b.x, a.y - b.y)
+    }
     const setupRay = (event: PointerEvent) => {
       const bounds = canvas.getBoundingClientRect()
       pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1)
@@ -130,6 +140,17 @@ function World(props: SceneProps) {
       return null
     }
     const down = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
+        if (touches.size >= 2) {
+          event.preventDefault()
+          if (active.current?.id) velocities.current.delete(active.current.id)
+          active.current = null
+          pinch = { distance: Math.max(1, touchDistance()), zoom: zoomFactor.current }
+          canvas.setPointerCapture(event.pointerId)
+          return
+        }
+      }
       if (event.button > 2 || active.current) return
       event.preventDefault()
       setupRay(event)
@@ -150,8 +171,15 @@ function World(props: SceneProps) {
       if (canMove) velocities.current.delete(part.id)
       canvas.setPointerCapture(event.pointerId)
       canvas.style.cursor = event.button === 2 ? 'ns-resize' : 'grabbing'
+      invalidate()
     }
     const move = (event: PointerEvent) => {
+      if (touches.has(event.pointerId)) touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      if (pinch && touches.size >= 2) {
+        zoomFactor.current = THREE.MathUtils.clamp(pinch.zoom * touchDistance() / pinch.distance, 0.55, 5)
+        invalidate()
+        return
+      }
       setupRay(event)
       const drag = active.current
       if (drag && drag.pointerId === event.pointerId) {
@@ -190,11 +218,18 @@ function World(props: SceneProps) {
       invalidate()
     }
     const up = (event: PointerEvent) => {
+      touches.delete(event.pointerId)
+      if (pinch) {
+        pinch = null
+        active.current = null
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
+      }
       if (active.current?.pointerId !== event.pointerId) return
       if (active.current.id && (event.type !== 'pointerup' || performance.now() - active.current.time > 100)) velocities.current.delete(active.current.id)
       active.current = null
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
       canvas.style.cursor = 'grab'
+      invalidate()
     }
     const leave = () => { latest.current.onHover(null); cursor.current = { x: 0, y: 0 } }
     const context = (e: Event) => e.preventDefault()
@@ -202,6 +237,7 @@ function World(props: SceneProps) {
       if (!e.shiftKey) return
       e.preventDefault()
       zoomFactor.current = THREE.MathUtils.clamp(zoomFactor.current * Math.exp(-e.deltaY * 0.0015), 0.55, 5)
+      invalidate()
     }
     const cameraControl = (event: Event) => {
       const action = (event as CustomEvent<string>).detail
@@ -212,6 +248,7 @@ function World(props: SceneProps) {
       if (action === 'bottom') { rotation.current.x = Math.PI; rotation.current.y = Math.PI }
       if (action === 'in') zoomFactor.current = Math.min(5, zoomFactor.current * 1.15)
       if (action === 'out') zoomFactor.current = Math.max(0.55, zoomFactor.current / 1.15)
+      invalidate()
     }
     window.addEventListener('board-camera', cameraControl)
     canvas.addEventListener('contextmenu', context)
@@ -239,8 +276,9 @@ function World(props: SceneProps) {
   const identityQuaternion = useRef(new THREE.Quaternion())
   const explodedEuler = useRef(new THREE.Euler())
 
-  useFrame(({ clock }, delta) => {
+  useFrame((_, elapsed) => {
     if (!model || !rig.current) return
+    const delta = Math.min(elapsed, 0.5)
     const target = latest.current.progress.current
     renderedProgress.current = latest.current.reducedMotion ? target : THREE.MathUtils.damp(renderedProgress.current, target, 9, delta)
     if (Math.abs(renderedProgress.current - target) < 0.00005) renderedProgress.current = target
@@ -294,9 +332,6 @@ function World(props: SceneProps) {
       const config = configs.find((item) => item.id === part.id)
       if (!config || part.id === 'pcb') continue
       const position = positionAt(p, config.range, config.exploded, config.assembled, offsets.current.get(part.id))
-      if (!reduced && active.current?.id !== part.id) {
-        position[1] += Math.sin(clock.elapsedTime * 0.7 + index * 1.7) * 0.025 * idleIntensity(p)
-      }
       if (latest.current.selected === part.id && p < 0.5) position[1] += 0.08 * (1 - p * 2)
       part.object.position.set(...position)
       explodedEuler.current.set(...(config.rotation ?? [0, 0, 0]))
@@ -315,9 +350,27 @@ function World(props: SceneProps) {
     const selectedPart = model.parts.find(part => part.id === latest.current.selected)
     gl.domElement.dataset.selectedPosition = selectedPart?.object.position.toArray().map(v => v.toFixed(3)).join(',') ?? ''
     gl.domElement.dataset.pan = rig.current.position.toArray().map(v => v.toFixed(3)).join(',')
+    const settling = Math.abs(p - target) > 0.00001
+      || Math.abs(rig.current.rotation.x - rotation.current.x) > 0.00001
+      || Math.abs(rig.current.rotation.y - rotation.current.y) > 0.00001
+      || rig.current.position.distanceToSquared(desiredPan.current) > 0.00000001
+      || (camera instanceof THREE.OrthographicCamera && Math.abs(camera.zoom - fitZoom(size.width, size.height) * zoomFactor.current) > 0.001)
+    gl.domElement.dataset.renderFrame = String(gl.info.render.frame)
+    if (settling || velocities.current.size || active.current) invalidate()
   })
 
   if (loadingError) throw loadingError
+  return <>
+    <StudioLights />
+    <group ref={rig}>
+      {model && <primitive object={model.root} />}
+      <group ref={marker} visible={false}><mesh renderOrder={20}><sphereGeometry args={[0.022,12,8]} /><meshBasicMaterial color="#d65332" depthTest={false} depthWrite={false} /></mesh></group>
+    </group>
+  </>
+}
+
+// Keep the environment capture stable when assembly/UI state changes.
+const StudioLights = memo(function StudioLights() {
   return <>
     <ambientLight intensity={0.75} />
     <directionalLight position={[2, 10, 4]} intensity={1.3} castShadow shadow-mapSize={[1024, 1024]} shadow-camera-left={-9} shadow-camera-right={9} shadow-camera-top={9} shadow-camera-bottom={-9} shadow-normalBias={0.015} color="#f4f0e4" />
@@ -327,30 +380,15 @@ function World(props: SceneProps) {
       <Lightformer position={[-8, 3, 1]} scale={[8, 5, 1]} rotation-y={Math.PI / 2} intensity={0.8} color="#ffffff" />
       <Lightformer position={[6, 3, 4]} scale={[5, 8, 1]} rotation-y={-Math.PI / 3} intensity={0.9} color="#f9f7ef" />
     </Environment>
-    <group ref={rig}>
-      {model && <primitive object={model.root} />}
-      <group ref={marker} visible={false}><mesh renderOrder={20}><sphereGeometry args={[0.022,12,8]} /><meshBasicMaterial color="#d65332" depthTest={false} depthWrite={false} /></mesh></group>
-    </group>
   </>
-}
-
-function SceneFallback({ onError }: { onError: () => void }) {
-  useEffect(() => { onError() }, [onError])
-  return <div className="scene-fallback" role="status"><h2>3D view unavailable</h2><p>This browser could not start the 3D view. Open Details to explore every component and specification.</p></div>
-}
-
-class SceneBoundary extends Component<{ children: ReactNode; onError: () => void }, { failed: boolean }> {
-  state = { failed: false }
-  static getDerivedStateFromError() { return { failed: true } }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error('Arduino scene unavailable', error.message, info.componentStack) }
-  render() { return this.state.failed ? <SceneFallback onError={this.props.onError} /> : this.props.children }
-}
+})
 
 export default function ArduinoScene(props: SceneProps) {
   const [contextLost, setContextLost] = useState(false)
   if (contextLost) return <SceneFallback onError={props.onError} />
   return <SceneBoundary onError={props.onError}>
     <Canvas
+      frameloop="demand"
       shadows
       orthographic
       camera={{ position: [7.5, 11.8, 14], zoom: 45, near: 0.1, far: 100 }}
