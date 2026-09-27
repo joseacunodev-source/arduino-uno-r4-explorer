@@ -31,7 +31,9 @@ export async function loadArduino() {
     object.traverse(child => {
       child.userData.partId = config.id
       if (child instanceof THREE.Mesh) {
-        child.castShadow = true
+        // The matrix contains thousands of tiny facets. Casting each into a
+        // second shadow pass costs far more than its barely visible shadow.
+        child.castShadow = config.id !== 'led-matrix'
         child.receiveShadow = true
       }
     })

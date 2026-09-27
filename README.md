@@ -16,7 +16,7 @@ Left-drag a component to move it; left-drag empty space to orbit. Right-drag ver
 
 ## Performance and deployment
 
-The scene renders on demand and stops after transitions settle. Pixel density is capped on mobile. The CAD model uses lossless Meshopt compression, retaining vertex values and triangle winding. Regenerate CAD first with `scripts/convert-cad.mjs`, then run `node scripts/compress-model.mjs`; the compression script verifies decoded geometry before writing.
+The scene renders on demand and stops after transitions settle. Moving the mouse without dragging does not redraw the scene; part picking first checks each part's bounds. Desktop and mobile pixel density is capped by a render-pixel budget. The official CAD model uses Meshopt compression, with only the repeating LED matrix simplified from 451,584 to 108,380 triangles. Other CAD meshes retain their original geometry. To regenerate the model, run `scripts/convert-cad.mjs`, then `node scripts/optimize-led-matrix.mjs` on the untouched conversion. The optimizer verifies the resulting GLB before replacing it.
 
 Deploy with Vercel using the Vite preset, build command `npm run build`, and output `dist`. `vercel.json` defines production security and cache headers; local production preview applies the same security headers. No environment variables, backend, accounts, analytics, or user-data storage are required. Never commit `.vercel` or credentials.
 

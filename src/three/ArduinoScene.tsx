@@ -17,6 +17,11 @@ const portraitView = (width: number, height: number) => width < 640 && height > 
 const fitZoom = (width: number, height: number) => portraitView(width, height)
   ? Math.min(width / 9.5, height / 14)
   : Math.min(width / 13.8, height / 11.4)
+const renderDpr = () => Math.min(
+  window.devicePixelRatio || 1,
+  window.innerWidth < 768 ? 1.25 : 1.5,
+  Math.sqrt(2_500_000 / (window.innerWidth * window.innerHeight)),
+)
 
 type SceneProps = {
   progress: RefObject<number>
@@ -39,6 +44,7 @@ function World(props: SceneProps) {
   const rig = useRef<THREE.Group>(null)
   const marker = useRef<THREE.Group>(null)
   const bounds = useRef(new Map<string, THREE.Box3>())
+  const pickBounds = useRef(new Map<string, THREE.Box3>())
   const focusOffset = useRef(new THREE.Vector3())
   const desiredPan = useRef(new THREE.Vector3())
   const latest = useRef(props)
@@ -61,7 +67,11 @@ function World(props: SceneProps) {
       if (cancelled) { value.dispose(); return }
       loaded = value
       value.root.updateMatrixWorld(true)
-      for (const part of value.parts) bounds.current.set(part.id, new THREE.Box3().setFromObject(part.object).translate(part.object.position.clone().negate()))
+      for (const part of value.parts) {
+        const worldBox = new THREE.Box3().setFromObject(part.object)
+        bounds.current.set(part.id, worldBox.clone().translate(part.object.position.clone().negate()))
+        pickBounds.current.set(part.id, worldBox.applyMatrix4(part.object.matrixWorld.clone().invert()))
+      }
       setModel(value)
       latest.current.onReady(value.configs ?? PARTS)
     }).catch((error: unknown) => setLoadingError(error instanceof Error ? error : new Error('The board could not load.')))
@@ -116,6 +126,9 @@ function World(props: SceneProps) {
     const plane = new THREE.Plane()
     const normal = new THREE.Vector3()
     const hit = new THREE.Vector3()
+    const pickBox = new THREE.Box3()
+    const boxHit = new THREE.Vector3()
+    let lastHoverAt = 0
     const touches = new Map<number, { x: number; y: number }>()
     let pinch: { distance: number; zoom: number } | null = null
     const touchDistance = () => {
@@ -130,14 +143,22 @@ function World(props: SceneProps) {
     }
     const findPart = () => {
       model.root.updateMatrixWorld(true)
-      const hits = raycaster.intersectObject(model.root, true)
-      for (const intersect of hits) {
-        let object: THREE.Object3D | null = intersect.object
-        while (object && !object.userData.partId) object = object.parent
-        if (latest.current.focused && object?.userData.partId !== latest.current.focused) continue
-        if (object?.userData.partId) return { id: object.userData.partId as string, point: intersect.point }
+      // Reject parts outside the ray before testing their detailed CAD meshes.
+      // Intersecting the full 3D model on every mouse move stalls desktop input.
+      let nearest: { id: string; point: THREE.Vector3; distance: number } | null = null
+      for (const part of model.parts) {
+        if (latest.current.focused && part.id !== latest.current.focused) continue
+        const localBounds = pickBounds.current.get(part.id)
+        if (!localBounds) continue
+        pickBox.copy(localBounds).applyMatrix4(part.object.matrixWorld)
+        if (!raycaster.ray.intersectBox(pickBox, boxHit)) continue
+        if (nearest && raycaster.ray.origin.distanceTo(boxHit) > nearest.distance) continue
+        const intersection = raycaster.intersectObject(part.object, true)[0]
+        if (intersection && (!nearest || intersection.distance < nearest.distance)) {
+          nearest = { id: part.id, point: intersection.point, distance: intersection.distance }
+        }
       }
-      return null
+      return nearest
     }
     const down = (event: PointerEvent) => {
       if (event.pointerType === 'touch') {
@@ -154,7 +175,7 @@ function World(props: SceneProps) {
       if (event.button > 2 || active.current) return
       event.preventDefault()
       setupRay(event)
-      const part = findPart()
+      const part = event.button === 0 ? findPart() : null
       const canMove = event.button === 0 && !latest.current.focused && latest.current.mode === 'move' && latest.current.progress.current < 0.15 && part && part.id !== 'pcb'
       if (part && event.button === 0) latest.current.onSelect(part.id)
       camera.getWorldDirection(normal)
@@ -211,11 +232,15 @@ function World(props: SceneProps) {
           rotation.current.x = drag.rotation.x + (event.clientY - drag.startY) * 0.005
         }
       } else if (event.pointerType !== 'touch') {
-        const part = findPart()
-        latest.current.onHover(part?.id ?? null)
-        canvas.style.cursor = part ? 'grab' : 'default'
+        const now = performance.now()
+        if (now - lastHoverAt >= 80) {
+          const part = findPart()
+          latest.current.onHover(part?.id ?? null)
+          canvas.style.cursor = part ? 'grab' : 'default'
+          lastHoverAt = now
+        }
       }
-      invalidate()
+      if (drag) invalidate()
     }
     const up = (event: PointerEvent) => {
       touches.delete(event.pointerId)
@@ -392,7 +417,7 @@ export default function ArduinoScene(props: SceneProps) {
       shadows
       orthographic
       camera={{ position: [7.5, 11.8, 14], zoom: 45, near: 0.1, far: 100 }}
-      dpr={[1, Math.min(window.devicePixelRatio || 1, window.innerWidth < 768 ? 1.25 : 1.75)]}
+      dpr={renderDpr()}
       gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
       fallback={<p>3D requires a browser with canvas support. Open Details to read about the board.</p>}
       onCreated={({ gl }) => {
