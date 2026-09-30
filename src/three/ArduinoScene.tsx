@@ -1,4 +1,4 @@
-import { memo, Suspense, useEffect, useRef, useState } from 'react'
+import { memo, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { SceneBoundary, SceneFallback } from '../components/SceneBoundary'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
@@ -13,10 +13,8 @@ import type { Vec3 } from '../lib/assembly'
 export type InteractionMode = 'move' | 'rotate'
 export type ArduinoModel = Awaited<ReturnType<typeof loadArduino>>
 
-const portraitView = (width: number, height: number) => width < 640 && height > width * 1.15
-const fitZoom = (width: number, height: number) => portraitView(width, height)
-  ? Math.min(width / 9.5, height / 14)
-  : Math.min(width / 13.8, height / 11.4)
+// Keep the same camera orientation in every layout; fit changes only scale.
+const fitZoom = (width: number, height: number) => Math.min(width / 13.8, height / 11.4)
 const renderDpr = () => Math.min(
   window.devicePixelRatio || 1,
   window.innerWidth < 768 ? 1.25 : 1.5,
@@ -33,6 +31,7 @@ type SceneProps = {
   onError: () => void
   onReady: (configs: readonly PartConfig[]) => void
   mode: InteractionMode
+  touchMode: InteractionMode
   resetToken: number
   reducedMotion: boolean
 }
@@ -57,6 +56,11 @@ function World(props: SceneProps) {
   const pan = useRef(new THREE.Vector3())
   const renderedProgress = useRef(0)
   const rotation = useRef({ x: 0, y: 0 })
+  const savedView = useRef<{ rotation: { x: number; y: number }; pan: THREE.Vector3; zoom: number } | null>(null)
+  const previousViewport = useRef<{ x: number; y: number } | null>(null)
+  const wasAnimating = useRef(false)
+  const cancelGesture = useRef(() => {})
+  const fades = useRef<{ material: THREE.Material; target: number; depthWrite: boolean; transparent: boolean }[]>([])
   const cursor = useRef({ x: 0, y: 0 })
   const active = useRef<{ id: string | null; startX: number; startY: number; anchor: THREE.Vector3; offset: Vec3; rotation: { x: number; y: number }; pointerId: number; button: number; time: number; pan: THREE.Vector3; zoom: number } | null>(null)
 
@@ -78,15 +82,30 @@ function World(props: SceneProps) {
     return () => { cancelled = true; loaded?.dispose() }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!(camera instanceof THREE.OrthographicCamera)) return
-    camera.position.set(7.5, 11.8, 14)
-    camera.lookAt(0, 1.0, 0)
-    if (portraitView(size.width, size.height)) camera.rotateZ(Math.PI / 2)
-    camera.zoom = fitZoom(size.width, size.height)
+    const rect = gl.domElement.getBoundingClientRect()
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    const previous = previousViewport.current
+    if (!previous) {
+      camera.position.set(7.5, 11.8, 14)
+      camera.lookAt(0, 1.0, 0)
+      camera.zoom = fitZoom(size.width, size.height)
+      camera.updateMatrixWorld()
+    } else if (rig.current) {
+      // Compensate for the new canvas center before easing into its new framing.
+      // Zoom, pan and orbit targets survive panel toggles and device rotation.
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+      rig.current.position.addScaledVector(right, (previous.x - center.x) / camera.zoom)
+        .addScaledVector(up, (center.y - previous.y) / camera.zoom)
+      cancelGesture.current()
+      wasAnimating.current = false
+    }
+    previousViewport.current = center
     camera.updateProjectionMatrix()
     invalidate()
-  }, [camera, size, invalidate])
+  }, [camera, gl, size.width, size.height, invalidate])
 
   useEffect(() => {
     offsets.current.clear()
@@ -94,29 +113,41 @@ function World(props: SceneProps) {
     velocities.current.clear()
     pan.current.set(0, 0, 0)
     zoomFactor.current = 1
-    active.current = null
+    savedView.current = null
+    cancelGesture.current()
   }, [props.resetToken])
 
+  useEffect(() => { cancelGesture.current() }, [props.touchMode])
+
   useEffect(() => {
-    pan.current.set(0, 0, 0)
     if (props.focused) {
+      if (!savedView.current) savedView.current = { rotation: { ...rotation.current }, pan: pan.current.clone(), zoom: zoomFactor.current }
+      pan.current.set(0, 0, 0)
       rotation.current = { x: 0, y: 0 }
       const extent = bounds.current.get(props.focused)?.getSize(new THREE.Vector3())
       zoomFactor.current = extent ? THREE.MathUtils.clamp(5 / Math.max(extent.x, extent.y, extent.z), 1.25, 4.5) : 2
-    } else zoomFactor.current = 1
+    } else if (savedView.current) {
+      rotation.current = savedView.current.rotation
+      pan.current.copy(savedView.current.pan)
+      zoomFactor.current = savedView.current.zoom
+      savedView.current = null
+    }
+    cancelGesture.current()
     if (!model) return
+    const transitions = new Map<THREE.Material, (typeof fades.current)[number]>()
     for (const part of model.parts) part.object.traverse(child => {
       if (!(child instanceof THREE.Mesh)) return
       for (const material of Array.isArray(child.material) ? child.material : [child.material]) {
         if (material.userData.originalDepthWrite === undefined) material.userData.originalDepthWrite = material.depthWrite
+        if (material.userData.originalTransparent === undefined) material.userData.originalTransparent = material.transparent
         const ghost = !!props.focused && part.id !== props.focused
-        material.transparent = ghost
-        material.opacity = ghost ? 0.035 : 1
-        material.depthWrite = ghost ? false : material.userData.originalDepthWrite
-        material.needsUpdate = true
+        transitions.set(material, { material, target: ghost ? 0.035 : 1, depthWrite: material.userData.originalDepthWrite, transparent: material.userData.originalTransparent })
       }
     })
-  }, [props.focused, props.focusToken, model])
+    fades.current = [...transitions.values()]
+    wasAnimating.current = false
+    invalidate()
+  }, [props.focused, props.focusToken, model, invalidate])
 
   useEffect(() => {
     if (!model) return
@@ -130,11 +161,29 @@ function World(props: SceneProps) {
     const boxHit = new THREE.Vector3()
     let lastHoverAt = 0
     const touches = new Map<number, { x: number; y: number }>()
-    let pinch: { distance: number; zoom: number } | null = null
-    const touchDistance = () => {
+    let pinch: { distance: number; zoom: number; cameraZoom: number; x: number; y: number; pan: THREE.Vector3 } | null = null
+    const touchGeometry = () => {
       const [a, b] = [...touches.values()]
-      return Math.hypot(a.x - b.x, a.y - b.y)
+      return { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
     }
+    const beginPinch = () => {
+      if (active.current?.id) velocities.current.delete(active.current.id)
+      active.current = null
+      pinch = { ...touchGeometry(), zoom: zoomFactor.current, cameraZoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : 80, pan: pan.current.clone() }
+    }
+    const cancel = () => {
+      const ids = [...touches.keys()]
+      if (active.current) {
+        ids.push(active.current.pointerId)
+        if (active.current.id) velocities.current.delete(active.current.id)
+      }
+      active.current = null
+      pinch = null
+      touches.clear()
+      for (const id of ids) if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id)
+      canvas.style.cursor = 'grab'
+    }
+    cancelGesture.current = cancel
     const setupRay = (event: PointerEvent) => {
       const bounds = canvas.getBoundingClientRect()
       pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1)
@@ -162,21 +211,21 @@ function World(props: SceneProps) {
     }
     const down = (event: PointerEvent) => {
       if (event.pointerType === 'touch') {
+        event.preventDefault()
         touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
+        canvas.setPointerCapture(event.pointerId)
         if (touches.size >= 2) {
-          event.preventDefault()
-          if (active.current?.id) velocities.current.delete(active.current.id)
-          active.current = null
-          pinch = { distance: Math.max(1, touchDistance()), zoom: zoomFactor.current }
-          canvas.setPointerCapture(event.pointerId)
+          beginPinch()
+          invalidate()
           return
         }
       }
       if (event.button > 2 || active.current) return
       event.preventDefault()
       setupRay(event)
-      const part = event.button === 0 ? findPart() : null
-      const canMove = event.button === 0 && !latest.current.focused && latest.current.mode === 'move' && latest.current.progress.current < 0.15 && part && part.id !== 'pcb'
+      const inputMode = event.pointerType === 'touch' ? latest.current.touchMode : latest.current.mode
+      const part = event.button === 0 && (event.pointerType !== 'touch' || inputMode === 'move') ? findPart() : null
+      const canMove = event.button === 0 && !latest.current.focused && inputMode === 'move' && latest.current.progress.current < 0.15 && part && part.id !== 'pcb'
       if (part && event.button === 0) latest.current.onSelect(part.id)
       camera.getWorldDirection(normal)
       plane.setFromNormalAndCoplanarPoint(normal, part?.point ?? new THREE.Vector3())
@@ -197,7 +246,18 @@ function World(props: SceneProps) {
     const move = (event: PointerEvent) => {
       if (touches.has(event.pointerId)) touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
       if (pinch && touches.size >= 2) {
-        zoomFactor.current = THREE.MathUtils.clamp(pinch.zoom * touchDistance() / pinch.distance, 0.55, 5)
+        event.preventDefault()
+        const gesture = touchGeometry()
+        zoomFactor.current = THREE.MathUtils.clamp(pinch.zoom * gesture.distance / pinch.distance, 0.55, 5)
+        const scale = pinch.cameraZoom * zoomFactor.current / pinch.zoom
+        const rect = canvas.getBoundingClientRect()
+        const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+        pan.current.copy(pinch.pan)
+          .addScaledVector(right, (gesture.x - cx) / scale - (pinch.x - cx) / pinch.cameraZoom)
+          .addScaledVector(up, -(gesture.y - cy) / scale + (pinch.y - cy) / pinch.cameraZoom)
+          .clampLength(0, 5)
         invalidate()
         return
       }
@@ -243,11 +303,22 @@ function World(props: SceneProps) {
       if (drag) invalidate()
     }
     const up = (event: PointerEvent) => {
+      if (!touches.has(event.pointerId) && active.current?.pointerId !== event.pointerId) return
+      if (event.type !== 'pointerup') { cancel(); invalidate(); return }
       touches.delete(event.pointerId)
       if (pinch) {
         pinch = null
         active.current = null
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
+        if (touches.size >= 2) beginPinch()
+        else if (touches.size === 1) {
+          // Continue with an orbit from the remaining finger's current position.
+          // Never accidentally pick up a component halfway through a gesture.
+          const [pointerId, point] = [...touches.entries()][0]
+          active.current = { id: null, startX: point.x, startY: point.y, anchor: new THREE.Vector3(), offset: [0, 0, 0], rotation: { ...rotation.current }, pointerId, button: 0, time: performance.now(), pan: pan.current.clone(), zoom: zoomFactor.current }
+        }
+        invalidate()
+        return
       }
       if (active.current?.pointerId !== event.pointerId) return
       if (active.current.id && (event.type !== 'pointerup' || performance.now() - active.current.time > 100)) velocities.current.delete(active.current.id)
@@ -276,6 +347,7 @@ function World(props: SceneProps) {
       invalidate()
     }
     window.addEventListener('board-camera', cameraControl)
+    window.addEventListener('blur', cancel)
     canvas.addEventListener('contextmenu', context)
     canvas.addEventListener('wheel', wheel, { passive: false })
     canvas.addEventListener('pointerdown', down)
@@ -285,6 +357,9 @@ function World(props: SceneProps) {
     canvas.addEventListener('lostpointercapture', up)
     canvas.addEventListener('pointerleave', leave)
     return () => {
+      cancel()
+      cancelGesture.current = () => {}
+      window.removeEventListener('blur', cancel)
       window.removeEventListener('board-camera', cameraControl)
       canvas.removeEventListener('contextmenu', context)
       canvas.removeEventListener('wheel', wheel)
@@ -303,7 +378,9 @@ function World(props: SceneProps) {
 
   useFrame((_, elapsed) => {
     if (!model || !rig.current) return
-    const delta = Math.min(elapsed, 0.5)
+    // A demand-rendered scene can be idle for minutes. That idle time must not
+    // count as animation time on the first frame of a new transition.
+    const delta = wasAnimating.current ? Math.min(elapsed, 0.5) : 1 / 60
     const target = latest.current.progress.current
     renderedProgress.current = latest.current.reducedMotion ? target : THREE.MathUtils.damp(renderedProgress.current, target, 9, delta)
     if (Math.abs(renderedProgress.current - target) < 0.00005) renderedProgress.current = target
@@ -311,30 +388,20 @@ function World(props: SceneProps) {
     const reduced = latest.current.reducedMotion
     const configs = model.configs ?? PARTS
     const blend = reduced ? 1 : 1 - Math.exp(-delta * 12)
+    let fading = false
+    for (const fade of fades.current) {
+      const material = fade.material
+      material.opacity = THREE.MathUtils.lerp(material.opacity, fade.target, reduced ? 1 : 1 - Math.exp(-delta * 8))
+      if (Math.abs(material.opacity - fade.target) < 0.001) material.opacity = fade.target
+      else fading = true
+      const transparent = material.opacity < 1 || fade.transparent
+      if (material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true }
+      material.depthWrite = material.opacity < 1 ? false : fade.depthWrite
+    }
     rig.current.rotation.x = THREE.MathUtils.lerp(rig.current.rotation.x, rotation.current.x, blend)
     rig.current.rotation.y = THREE.MathUtils.lerp(rig.current.rotation.y, rotation.current.y, blend)
     if (Math.abs(rig.current.rotation.x - rotation.current.x) < 0.00001) rig.current.rotation.x = rotation.current.x
     if (Math.abs(rig.current.rotation.y - rotation.current.y) < 0.00001) rig.current.rotation.y = rotation.current.y
-    const focusPart = model.parts.find(part => part.id === latest.current.focused)
-    focusOffset.current.set(0,0,0)
-    if (focusPart) {
-      const box = bounds.current.get(focusPart.id)
-      const center = box?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3()
-      center.applyQuaternion(focusPart.object.quaternion).add(focusPart.object.position)
-      focusOffset.current.copy(center).applyEuler(rig.current.rotation).negate().add(new THREE.Vector3(0,1,0))
-      if (marker.current) {
-        marker.current.position.copy(focusPart.object.position).add(new THREE.Vector3(0,(box?.max.y ?? 0.2)+0.22,0))
-        marker.current.visible = true
-      }
-    } else if (marker.current) marker.current.visible = false
-    desiredPan.current.copy(pan.current).add(focusOffset.current)
-    rig.current.position.lerp(desiredPan.current, blend)
-    if (rig.current.position.distanceToSquared(desiredPan.current) < 0.00000001) rig.current.position.copy(desiredPan.current)
-    if (camera instanceof THREE.OrthographicCamera) {
-      camera.zoom = THREE.MathUtils.lerp(camera.zoom, fitZoom(size.width, size.height) * zoomFactor.current, blend)
-      camera.updateProjectionMatrix()
-      gl.domElement.dataset.zoom = zoomFactor.current.toFixed(3)
-    }
     for (const [id, velocity] of velocities.current) {
       if (active.current?.id === id) continue
       if (p > 0.15 || reduced) { velocities.current.delete(id); continue }
@@ -363,6 +430,26 @@ function World(props: SceneProps) {
       explodedQuaternion.current.setFromEuler(explodedEuler.current)
       part.object.quaternion.slerpQuaternions(explodedQuaternion.current, identityQuaternion.current, partProgress(p, config.range))
     }
+    const focusPart = model.parts.find(part => part.id === latest.current.focused)
+    focusOffset.current.set(0,0,0)
+    if (focusPart) {
+      const box = bounds.current.get(focusPart.id)
+      const center = box?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3()
+      center.applyQuaternion(focusPart.object.quaternion).add(focusPart.object.position)
+      focusOffset.current.copy(center).applyEuler(rig.current.rotation).negate().add(new THREE.Vector3(0,1,0))
+      if (marker.current) {
+        marker.current.position.copy(focusPart.object.position).add(new THREE.Vector3(0,(box?.max.y ?? 0.2)+0.22,0))
+        marker.current.visible = true
+      }
+    } else if (marker.current) marker.current.visible = false
+    desiredPan.current.copy(pan.current).add(focusOffset.current)
+    rig.current.position.lerp(desiredPan.current, blend)
+    if (rig.current.position.distanceToSquared(desiredPan.current) < 0.00000001) rig.current.position.copy(desiredPan.current)
+    if (camera instanceof THREE.OrthographicCamera) {
+      camera.zoom = THREE.MathUtils.lerp(camera.zoom, fitZoom(size.width, size.height) * zoomFactor.current, blend)
+      camera.updateProjectionMatrix()
+      gl.domElement.dataset.zoom = zoomFactor.current.toFixed(3)
+    }
     // Inspectable state for browser checks and future performance tuning.
     gl.domElement.dataset.progress = p.toFixed(4)
     gl.domElement.dataset.partCount = String(model.parts.length)
@@ -375,13 +462,18 @@ function World(props: SceneProps) {
     const selectedPart = model.parts.find(part => part.id === latest.current.selected)
     gl.domElement.dataset.selectedPosition = selectedPart?.object.position.toArray().map(v => v.toFixed(3)).join(',') ?? ''
     gl.domElement.dataset.pan = rig.current.position.toArray().map(v => v.toFixed(3)).join(',')
+    gl.domElement.dataset.viewPan = pan.current.toArray().map(v => v.toFixed(3)).join(',')
+    gl.domElement.dataset.cameraZoom = camera instanceof THREE.OrthographicCamera ? camera.zoom.toFixed(3) : ''
+    gl.domElement.dataset.cameraQuaternion = camera.quaternion.toArray().map(v => v.toFixed(4)).join(',')
     const settling = Math.abs(p - target) > 0.00001
       || Math.abs(rig.current.rotation.x - rotation.current.x) > 0.00001
       || Math.abs(rig.current.rotation.y - rotation.current.y) > 0.00001
       || rig.current.position.distanceToSquared(desiredPan.current) > 0.00000001
       || (camera instanceof THREE.OrthographicCamera && Math.abs(camera.zoom - fitZoom(size.width, size.height) * zoomFactor.current) > 0.001)
     gl.domElement.dataset.renderFrame = String(gl.info.render.frame)
-    if (settling || velocities.current.size || active.current) invalidate()
+    wasAnimating.current = !!(settling || fading || velocities.current.size || active.current)
+    gl.domElement.dataset.animating = String(wasAnimating.current)
+    if (wasAnimating.current) invalidate()
   })
 
   if (loadingError) throw loadingError

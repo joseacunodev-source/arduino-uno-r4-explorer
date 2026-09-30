@@ -12,7 +12,7 @@ Checks: `npm test` and `npm run test:e2e` (install a Playwright browser first, o
 
 ## Experience
 
-Left-drag a component to move it; left-drag empty space to orbit. Right-drag vertically to zoom; middle-drag to pan. Scroll to assemble or disassemble. Touch supports one-finger drag, two-finger pinch, and an assembly button. Details provides searchable parts, component isolation, specifications, keyboard-accessible assembly and camera controls, and credits.
+Left-drag a component to move it; left-drag empty space to orbit. Right-drag vertically to zoom; middle-drag to pan. Scroll to assemble or disassemble. Touch defaults to one-finger orbit. Two fingers pan and pinch to zoom; enable Move parts to drag components. The touch toolbar works in portrait and landscape. Details preserves camera orientation, zoom and pan while easing into the new layout. Find on board fades surrounding parts and moves to the selected component; Show all restores the previous view. Details provides searchable parts, component isolation, specifications, keyboard-accessible assembly and camera controls, and credits.
 
 ## Performance and deployment
 

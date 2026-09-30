@@ -25,6 +25,7 @@ export default function App() {
   const [entered, setEntered] = useState(false)
   const [help, setHelp] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [touchMode, setTouchMode] = useState<'move' | 'rotate'>('rotate')
   const [configs, setConfigs] = useState<readonly PartConfig[]>(PARTS)
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<'components' | 'specs'>('components')
@@ -69,7 +70,7 @@ export default function App() {
       <section ref={section} className="assembly-scroll" id="experience" aria-label="Interactive board assembly">
         <div className="experience-sticky">
           <div className="scene-area" data-testid="scene-area">
-            <SceneBoundary onError={onError}><Suspense fallback={null}><ArduinoScene progress={progress} selected={selected} focused={focused} focusToken={focusToken} onSelect={setSelected} onHover={onHover} onReady={onReady} onError={onError} mode="move" resetToken={resetToken} reducedMotion={reducedMotion} /></Suspense></SceneBoundary>
+            <SceneBoundary onError={onError}><Suspense fallback={null}><ArduinoScene progress={progress} selected={selected} focused={focused} focusToken={focusToken} onSelect={setSelected} onHover={onHover} onReady={onReady} onError={onError} mode="move" touchMode={touchMode} resetToken={resetToken} reducedMotion={reducedMotion} /></Suspense></SceneBoundary>
             {activePart && <div className="focus-caption" role="status"><div><span className="focus-dot" /><strong>{activePart.name}</strong><p>{activePart.spec}</p></div><button onClick={() => setFocused(null)}>Show all <Icon name="close" size={14} /></button></div>}
           </div>
           <div className="corner-tools" role="group" aria-label="Experience controls">
@@ -77,8 +78,8 @@ export default function App() {
             <button ref={helpButton} onClick={() => setHelp(v => !v)} aria-label="Show controls" aria-expanded={help} title="Controls">?</button>
             <button ref={detailsButton} className="details-toggle" onClick={() => setDetailsOpen(v => !v)} aria-expanded={detailsOpen} aria-controls="inspector"><span className="accent-square" /> Details</button>
           </div>
-          {help && <section className="help-popover" role="dialog" aria-label="Controls"><header><h2>Controls</h2><button ref={helpClose} onClick={closeHelp} aria-label="Close controls"><Icon name="close" /></button></header><dl><div><dt>Move a part</dt><dd>Left-drag a component</dd></div><div><dt>Orbit</dt><dd>Left-drag empty space</dd></div><div><dt>Zoom</dt><dd>Right-drag up / down</dd></div><div><dt>Pan</dt><dd>Middle-drag</dd></div><div><dt>Assemble</dt><dd>Scroll down</dd></div><div><dt>Disassemble</dt><dd>Scroll up</dd></div></dl><p>Touch: drag to move or orbit. Pinch with two fingers to zoom. Tap Assemble below the board.</p></section>}
-          {!detailsOpen && !focused && <div className="touch-tools" role="group" aria-label="Touch controls"><button aria-label="Zoom out" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'out' }))}>−</button><button onClick={() => goTo(percent > 50 ? 0 : 1)}>{percent > 50 ? 'Explode' : 'Assemble'}</button><button aria-label="Zoom in" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'in' }))}>+</button></div>}
+          {help && <section className="help-popover" role="dialog" aria-label="Controls"><header><h2>Controls</h2><button ref={helpClose} onClick={closeHelp} aria-label="Close controls"><Icon name="close" /></button></header><dl><div><dt>Move a part</dt><dd>Left-drag a component</dd></div><div><dt>Orbit</dt><dd>Left-drag empty space</dd></div><div><dt>Zoom</dt><dd>Right-drag up / down</dd></div><div><dt>Pan</dt><dd>Middle-drag</dd></div><div><dt>Assemble</dt><dd>Scroll down</dd></div><div><dt>Disassemble</dt><dd>Scroll up</dd></div></dl><p>Touch: drag to orbit. Use two fingers to pan or pinch to zoom. Turn on Move parts to drag a component.</p></section>}
+          {!detailsOpen && !focused && <div className="touch-tools" role="group" aria-label="Touch controls"><button aria-label="Zoom out" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'out' }))}>−</button><button onClick={() => goTo(percent > 50 ? 0 : 1)}>{percent > 50 ? 'Explode' : 'Assemble'}</button><button aria-label="Zoom in" onClick={() => window.dispatchEvent(new CustomEvent('board-camera', { detail: 'in' }))}>+</button><button className="touch-mode" aria-pressed={touchMode === 'move'} onClick={() => setTouchMode(value => value === 'move' ? 'rotate' : 'move')}>Move parts</button></div>}
         </div>
       </section>
     </main>
